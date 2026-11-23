@@ -86,9 +86,11 @@ def fp4_itq(x: np.ndarray, *, iters: int = 50, seed: int = 0) -> tuple[np.ndarra
     codes = None
     for _ in range(max(1, iters)):
         rotated = z @ R
+        from .nvfp4 import dequantize_nvfp4
+
         t = quantize_nvfp4(rotated.astype(np.float32))
         codes = t.codes
-        err = float(np.mean((rotated - t.codes.astype(np.float64)) ** 2))
+        err = float(np.mean((rotated - dequantize_nvfp4(t).astype(np.float64)) ** 2))
         if err >= best:
             break
         best = err
