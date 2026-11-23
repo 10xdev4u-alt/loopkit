@@ -62,8 +62,8 @@ def certify_pass(ref: Mapping[str, np.ndarray], cand: Mapping[str, np.ndarray], 
             n += a.size
             continue
         n += a.size
-        if not np.array_equal(a, b):
-            mismatches += int(np.count_nonzero(a != b))
+        if not np.array_equal(a, b) or _bytes(a) != _bytes(b):
+            mismatches += max(1, int(np.count_nonzero(a != b)))
             if a.dtype.kind in "fiu b":
                 max_err = max(max_err, float(np.max(np.abs(a.astype(np.float64) - b.astype(np.float64)))))
             else:

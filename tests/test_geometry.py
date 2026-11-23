@@ -31,7 +31,7 @@ def test_break_even_gamma_star_bands():
 
 
 def test_break_even_passes():
-    assert break_even_passes(2.0, 1.0, 0.25) == 2
+    assert break_even_passes(2.0, 1.0, 0.25) == 1
     assert break_even_passes(1.0, 1.0, 1.0) is None
 
 

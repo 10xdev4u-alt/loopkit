@@ -45,5 +45,11 @@ def apply_edits(state: Mapping[str, np.ndarray],
     for edit in edits:
         if edit.key not in out:
             raise KeyError(edit.key)
-        out[edit.key] = np.asarray(out[edit.key]) + edit.delta
+        cur = np.ascontiguousarray(out[edit.key])
+        if hashlib.sha256(cur.tobytes()).hexdigest() != edit.old_digest:
+            raise ValueError(f"edit applied to a different state than it was diffed from: {edit.key}")
+        new = np.asarray(cur) + edit.delta
+        if hashlib.sha256(np.ascontiguousarray(new).tobytes()).hexdigest() != edit.new_digest:
+            raise ValueError(f"edit result digest mismatch: {edit.key}")
+        out[edit.key] = new
     return out

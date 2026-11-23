@@ -35,7 +35,7 @@ def break_even_passes(base_per_pass: float, codec_setup: float,
     """Smallest n >= 1 where n passes of base work beat codec setup + n*cost."""
     if base_per_pass <= codec_per_pass:
         return None
-    n = int(np.ceil(codec_setup / (base_per_pass - codec_per_pass))) + 1
+    n = int(np.floor(codec_setup / (base_per_pass - codec_per_pass))) + 1
     return max(1, n)
 
 

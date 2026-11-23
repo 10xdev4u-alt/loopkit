@@ -105,22 +105,20 @@ def quantize_nvfp4(x: np.ndarray, block: int = 16) -> NVFP4Tensor:
     absmax = np.max(np.abs(blocks), axis=-1)
     scale_codes = e4m3_encode(np.maximum(absmax / 6.0, 2.0 ** -9))
     scales = e4m3_decode(scale_codes)
-    q = np.clip(np.rint(blocks / scales[..., None]).astype(np.int32), -8, 8)
-    # map [-8..8] to E2M1 codes; sign of zero preserved as code 8
-    levels = FP4_LEVELS[:8]           # 0,.5,1,1.5,2,3,4,6
-    codes = np.zeros(q.shape, dtype=np.uint8)
-    for i in range(8):
-        codes = np.where(q == i, i, codes)
-        codes = np.where(q == -i, 8 + i, codes)
-    return NVFP4Tensor(codes.reshape(x.shape), scale_codes, x.shape, block)
+    ratio = (blocks / scales[..., None]).astype(np.float64)
+    # nearest E2M1 code (also handles extremes and preserves signed zero)
+    codes = np.argmin(np.abs(ratio[..., None] - FP4_LEVELS), axis=-1).astype(np.uint8)
+    codes = codes.reshape(x.shape[:-1] + (-1,))[..., : x.shape[-1]]
+    return NVFP4Tensor(codes, scale_codes, x.shape, block)
 
 
 def dequantize_nvfp4(t: NVFP4Tensor) -> np.ndarray:
-    codes = t.codes.reshape(t.shape[:-1] + (-1, t.block))
-    vals = FP4_LEVELS[codes.astype(np.intp)]
-    scales = e4m3_decode(t.scales)[..., None]
-    out = (vals * scales).reshape(t.shape)
-    return out.astype(np.float32)
+    nb = (t.shape[-1] + t.block - 1) // t.block
+    padded = np.zeros(t.shape[:-1] + (nb * t.block,), dtype=t.codes.dtype)
+    padded[..., : t.shape[-1]] = t.codes.reshape(t.shape)
+    vals = FP4_LEVELS[padded.reshape(t.shape[:-1] + (nb, t.block)).astype(np.intp)]
+    out = (vals * e4m3_decode(t.scales)[..., None]).reshape(t.shape[:-1] + (-1,))[..., : t.shape[-1]]
+    return out.reshape(t.shape).astype(np.float32)
 
 
 def quantize_mxfp8(x: np.ndarray, block: int = 32) -> MXFP8Tensor:
@@ -131,13 +129,18 @@ def quantize_mxfp8(x: np.ndarray, block: int = 32) -> MXFP8Tensor:
     exp = np.ceil(np.log2(np.maximum(absmax, 1e-30) / 448.0)).astype(np.int32)
     exp = np.clip(exp, -126, 126)
     codes = e4m3_encode(blocks / (2.0 ** exp)[..., None])
-    return MXFP8Tensor(codes.reshape(x.shape), (exp + 127).astype(np.uint8), x.shape, block)
+    codes = codes.reshape(x.shape[:-1] + (-1,))[..., : x.shape[-1]]
+    return MXFP8Tensor(codes, (exp + 127).astype(np.uint8), x.shape, block)
 
 
 def dequantize_mxfp8(t: MXFP8Tensor) -> np.ndarray:
-    b = t.codes.reshape(t.shape[:-1] + (-1, t.block))
+    nb = (t.shape[-1] + t.block - 1) // t.block
+    padded = np.zeros(t.shape[:-1] + (nb * t.block,), dtype=t.codes.dtype)
+    padded[..., : t.shape[-1]] = t.codes.reshape(t.shape)
+    b = padded.reshape(t.shape[:-1] + (nb, t.block))
     scales = (2.0 ** (t.scales.astype(np.int32) - 127))[..., None]
-    return (e4m3_decode(b) * scales).reshape(t.shape).astype(np.float32)
+    out = (e4m3_decode(b) * scales).reshape(t.shape[:-1] + (-1,))[..., : t.shape[-1]]
+    return out.reshape(t.shape).astype(np.float32)
 
 
 # ---------------------- entropy-coded symbol streams -----------------------

@@ -1,0 +1,17 @@
+{
+  "id": "jprinceraj/loopkit-geometry-gate-single",
+  "title": "Loopkit Geometry Gate Single T4",
+  "code_file": "geometry_gate.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "machine_shape": "NvidiaTeslaT4",
+  "dataset_sources": [],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": [],
+  "github_sources": []
+}
