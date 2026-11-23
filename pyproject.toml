@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopkit"
+version = "0.1.0"
+description = "Lossless NVFP4/MXFP4 toolkit for looped MoE inference"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+torch = ["torch>=2.1"]
+
+[project.scripts]
+loopkit = "loopkit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = ["kaggle: requires a Kaggle T4 runner"]
+testpaths = ["tests"]

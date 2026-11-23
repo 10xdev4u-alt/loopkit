@@ -1,0 +1,30 @@
+[model]
+name = "Inkling-2-Mini"
+license = "Apache-2.0"
+total_params_b = 26.4
+active_params_b = 3.4
+weight_activations_b = 5.4
+layers = 24
+loop_passes = 3
+experts = 128
+outlier_dim = 2027
+
+[codec]
+nvfp4_layers = 20
+mxfp8_layers = 4
+nvfp4_block = 16
+mxfp8_block = 32
+codec = "deflate-v1"
+
+[audit]
+loops = 3
+warmup = 5
+repeats = 50
+min_repeats = 20
+
+[geometry]
+default_rank = 256
+default_n = 4096
+gamma_star_analytic = 0.36
+gamma_star_rotation = 0.41
+gamma_star_itq = 0.51
