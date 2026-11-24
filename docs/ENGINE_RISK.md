@@ -5,7 +5,9 @@
 
 Target facts (user brief + /tmp/build/loopkit/configs/inkling2mini.toml):
 - Inkling 2 Mini: 24 layers (20 native NVFP4 + 4 MXFP8), 128-expert MoE, 8 active
-  experts, attention residuals, learned cross-loop message gate, outlier dim 2027.
+  experts, attention residuals, learned cross-loop message gate **[upstream: rank-r gain/forget
+  controllers; our scalar gamma was a simplification]**, outlier dim 2027 **[unverified local
+  hypothesis; not in primary sources]**.
 - Middle layers loop: 12 middle layers run 3 passes/token (48 layer applications).
 - Scale: 26.4B total / 3.4B active / ~5.4B weight activations per token.
 - Artifact: ~20 GB. Hardware: 2× Tesla T4 (sm_75, no FP4/FP8 tensor cores,
@@ -17,6 +19,20 @@ Goal as stated: a custom C++ engine that beats llama.cpp/vLLM on this hardware.
 This is a skeptical review of that goal: what fails, what is not measurable on
 T4, the honest benchmark protocol, the one reframe that makes the goal
 achievable and verifiable in 4 weeks, and fork vs greenfield.
+
+
+> **Correction — 2026-11-24 (source fact-check; supersedes premises below):**
+> - **outlier dim 2027 is an unverified local hypothesis; not in primary sources** (absent from
+>   TML's release post and model card; present only in our config/tests/docs). Do not treat it as
+>   a source fact.
+> - **Gate: rank-r gain/forget loop controllers in the upstream implementation; our earlier
+>   scalar-gamma model was a simplification.** Upstream `src/models/inkling2-loop.cpp` /
+>   `src/models/inkling2.cpp` use `LLM_TENSOR_LOOP_*_CTRL_{DOWN,GAIN,FORGET}` at rank 64.
+> - **Upstream already provides the looped graph and converter**
+>   (`src/models/inkling2-loop.cpp`, `conversion/inkling2.py`); the loop covers layers 6–17 with
+>   `n_slot = n_phys + (n_passes-1)*(core_end-core_start)`. Our fork's contribution is
+>   union-resident MoE routing on top of upstream, not building the loop graph from scratch.
+>   Source-labelled details: `docs/INKLING_INTEGRATION.md`.
 
 ---
 
@@ -57,7 +73,9 @@ achievable and verifiable in 4 weeks, and fork vs greenfield.
 - **Failure mode:** month 4 ships the benchmark without loop semantics verified,
   or with them bolted on unverified.
 - **Mechanism:** Inkling 2 Mini's only structural delta over stock llama.cpp is
-  the 3-pass middle-12 loop + cross-loop message gate. llama.cpp has tuned MoE
+  the 3-pass loop over core layers 6–17 + cross-loop message gate. **Correction:** upstream
+  llama.cpp already implements this architecture (`src/models/inkling2-loop.cpp`,
+  `conversion/inkling2.py`); llama.cpp has tuned MoE
   routing, attention, and TP. A greenfield engine spends its 4 weeks on shared
   code, not the new logic.
 - **Mitigation:** fork llama.cpp; weeks 1–2 port base + MoE + TP (already
@@ -181,7 +199,8 @@ achievable and verifiable in 4 weeks, and fork vs greenfield.
 
 **Reframe: "The goal is to ship an engine that is protocol-verified at
 parity-or-better vs llama.cpp at batch 1–4 on 2×T4, with Inkling 2 Mini's loop
-semantics (3 passes/token, cross-loop message gate, outlier dim 2027) verified
+semantics (3 passes/token, cross-loop message gate **[rank-r gain/forget upstream]**, outlier dim
+2027 **[unverified local hypothesis; not in primary sources]**) verified
 bit-exact by loopkit certificates — not to 'beat llama.cpp' (a moving
 target)."**
 
@@ -207,7 +226,8 @@ base — so the fork gives an instant A/B (your loop engine vs the already-fast
 base) and a parity baseline from week 2. Greenfield spends its 4 weeks
 re-deriving MoE/attention/TP — most of what makes llama.cpp fast on T4 — and
 arrives at parity only by re-copying it, while the genuinely new work (3-pass
-middle-12 loop, cross-loop message gate, outlier dim 2027, loopkit
+core-layer 6–17 loop, cross-loop message gate **[rank-r gain/forget upstream]**, outlier dim 2027
+**[unverified local hypothesis; not in primary sources]**, loopkit
 semantics) is implemented late with no time to verify. Greenfield earns its
 place only as a later, post-parity follow-on if a structural win (e.g.,
 loop-aware weight reuse across the 3 passes) is proven. Additionally, fp16

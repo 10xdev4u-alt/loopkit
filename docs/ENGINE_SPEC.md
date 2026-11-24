@@ -5,11 +5,36 @@ Status: design. Hardware: Kaggle 2×T4 (sm_75, 16 GB each, 320 GB/s HBM2, ~65 TF
 format source of truth: `/tmp/build/loopkit` (Apache-2.0). No weights ship with loopkit; we ingest
 the model's native NVFP4 codes verbatim and never re-quantize.
 
+
+> **Correction — 2026-11-24 (source fact-check; supersedes premises below):**
+> - **d2027 / "activation outlier at dimension 2027" is an unverified local
+>   hypothesis; not in primary sources.** It appears only in our repo/config/tests
+>   and is absent from Thinking Machines Lab's release post and model card. Treat
+>   the FP32 outlier side-lane (ODSL) as speculative until measured on real weights.
+> - **Gate: rank-r gain/forget loop controllers in the upstream implementation;
+>   our earlier scalar-gamma model was a simplification.** Upstream
+>   `src/models/inkling2-loop.cpp` and `src/models/inkling2.cpp` implement
+>   `(1 - forget)*cur + gain*message` with `tanh` gain/forget produced from
+>   `LLM_TENSOR_LOOP_Q_CTRL_*` / `_K_CTRL_*` / `_V_CTRL_*` / `_FFN_CTRL_*`
+>   (`_DOWN`, `_GAIN`, `_FORGET`) at `gate_rank=64` — not a scalar softmax.
+>   Cache slots: `n_slot = n_phys + (n_passes-1)*(core_end-core_start)`; for this
+>   model `24 + 2*12 = 48`, with layers 6–17 looped (not "prelude 0–11").
+> - **Upstream already provides the looped graph and converter**
+>   (`src/models/inkling2-loop.cpp`, `src/models/inkling2.cpp`,
+>   `conversion/inkling2.py`, `gguf-py/gguf/constants.py`,
+>   `LLM_ARCH_INKLING2_LOOP`). Our fork's contribution is union-resident MoE
+>   routing on top of upstream, not building the loop graph from scratch.
+> - The design below is retained as the original plan; every `gamma` / `d2027`
+>   mention is annotated inline. See `docs/INKLING_INTEGRATION.md` for the
+>   source-labelled fact inventory.
+
 Model constants (from `configs/inkling2mini.toml`): 24 layers, 4 blocks × 6, loop_passes=3 for
 blocks 2–3 (middle 12 layers), 48 layer applications/token, 26.4B total / 3.4B active / 5.4B
 weight activations per token, 128 experts/layer with top-8, NVFP4 block=16 on 20 layers, MXFP8
-block=32 on last 4, outlier at K-dimension **2027**, cross-loop message = softmax mix of two
-previous-pass vectors with learned gate `gamma` initialized to 0.0, varloop variant 1–5 passes.
+block=32 on last 4, outlier at K-dimension **2027** **[unverified local hypothesis; not in
+primary sources]**, cross-loop message = softmax mix of two previous-pass vectors with learned gate
+`gamma` **[simplification — upstream uses rank-r gain/forget loop controllers]**, initialized to 0.0
+in the simplified model, varloop variant 1–5 passes.
 Footprint ~20 GB, so it does not fit on one 16 GB T4: **device sharding is mandatory**.
 
 ---
@@ -23,7 +48,8 @@ engine knows it can skip.
 ### Decision 1 — Route-once, pass-resident expert tiles (RORET)
 
 **Premise to measure, not assume:** the router sees nearly the same hidden state on passes 0, 1, 2
-because the cross-loop message starts at `gamma=0` and is a small softmax mixture. Therefore the
+because in the *simplified local model* the cross-loop message starts at `gamma=0` and is a small
+softmax mixture **[upstream: rank-r gain/forget controllers, not a scalar gamma]**. Therefore the
 top-8 expert *set* per middle layer is identical across the 3 passes for most tokens.
 
 **Mechanism:** at the first pass of a middle layer, compute top-8 once, gather those 8 experts'
@@ -65,15 +91,17 @@ Measured gate: top-8 set agreement ≥95% of tokens (else Decision 1 is void), a
 
 **Premise:** T4 has FP16 tensor cores but no FP4/FP8. llama.cpp-style kernels dequantize in the
 K-loop; we do too, but with the block-scale layout chosen so the 16-code block's E4M3 scale is a
-single broadcast, and with the known d2027 spike removed from the FP16 datapath.
+single broadcast, and with a candidate d2027 spike removed from the FP16 datapath
+**[d2027: unverified local hypothesis; not in primary sources]**.
 
 **Mechanism:** decode E2M1/E4M3 via bit-exact LUTs derived from loopkit's `FP4_LEVELS` and
-`_E4M3_LUT`, convert operands to FP16 for `mma.sync.m16n8k16`, and accumulate FP32. K-column 2027
-is excluded from the FP16 fragment; its dequantized FP32 value is accumulated in a separate
+`_E4M3_LUT`, convert operands to FP16 for `mma.sync.m16n8k16`, and accumulate FP32. K-column 2027 **[unverified local hypothesis; not in primary sources]**
+is excluded from the FP16 fragment in this prototype; its dequantized FP32 value is accumulated in a separate
 `float spike[N]` per output row and added in the epilogue. Prevents FP16 overflow and keeps the
 largest-magnitude dimension numerically exact.
 
-**Why structural:** the outlier is a named property of *this* model. A generic engine must either
+**Why structural (conditional):** *if* the unverified local d2027 hypothesis holds (it is not in
+primary sources), the outlier is a named property of *this* model. A generic engine must either
 clamp (wrong) or keep the whole GEMM in FP32 (8× slower on T4). One extra FP32 FMA lane costs
 ~1/4096 of the K work.
 
@@ -88,7 +116,7 @@ clamp (wrong) or keep the whole GEMM in FP32 (8× slower on T4). One extra FP32 
   CMakeLists.txt
   cmake/InklingConfig.cmake.in
   include/loopengine/
-    config.hpp          # InklingConfig: 24/4/6/3/12, 128/top8, block 16/32, outlier 2027
+    config.hpp          # InklingConfig: 24/4/6/3/12, 128/top8, block 16/32, outlier 2027 [UNVERIFIED: not in primary sources]
     inkbin.hpp          # on-disk format reader (header + code plane + scale plane)
     codec.hpp           # host mirror of loopkit quantize/dequant (self-tests + converter)
     dequant.cuh         # device LUTs and __device__ inline decode (E2M1/E4M3/E8M0)
@@ -105,9 +133,9 @@ clamp (wrong) or keep the whole GEMM in FP32 (8× slower on T4). One extra FP32 
     scheduler.cpp engine.cpp cert.cpp audit.cpp ref.cpp
     main.cpp            # CLI: --batch N --passes 1..5 --math-ref|--tc --certify --bench
   kernels/
-    dequant_gemm.cu     # NVFP4 and MXFP8 WMMA kernels + d2027 side lane
+    dequant_gemm.cu     # NVFP4/MXFP8 WMMA kernels + speculative d2027 side lane [unverified local hypothesis; not in primary sources]
     expert_gather.cu    # route-once gather into hot tile arena
-    message_mix.cu      # softmax mix, gamma gate (zero-skip at pass 0)
+    message_mix.cu      # scalar softmax mix / gamma gate [SIMPLIFICATION: upstream rank-r gain/forget controllers] (zero-skip at pass 0)
   tests/
     test_codec_bitwise.cpp test_dequant_bitwise.cpp test_cert.cpp
     test_scheduler.cpp test_gemm_drift.cpp
@@ -148,8 +176,8 @@ loop-awareness, routing reuse, pass-indexed KV, and the certificate all meet.
 struct alignas(64) LoopMessage {          // one (token, pass) cross-loop handoff
   __half  prev[kHidden];                  // vector from pass p-1
   __half  curr[kHidden];                  // vector from pass p
-  __half  mixed[kHidden];                 // softmax(gamma)*prev + (1-softmax(gamma))*curr
-  float   gamma;                          // learned gate, 0.0f at pass 0 -> skip mixing
+  __half  mixed[kHidden];                 // simplified scalar mix; upstream: rank-r gain/forget controllers
+  float   gamma;                          // simplified learned gate, 0.0f at pass 0 -> skip mixing
   uint32_t pass_digest;                   // rolling SHA-256 accumulator for cert.hpp
 };
 
@@ -197,7 +225,8 @@ to FP16 is an approximation. Stage FP16 into shared memory, then `wmma::load_mat
 = 64, M-tile = 16; use `mma.sync.aligned.m16n8k16.row.col.f32.f16.f16.f32`. Last 4 MXFP8 layers
 use K-tile = 128 (4 blocks) with the same epilogue.
 
-**Outlier lane:** K-column 2027 is removed from the FP16 fragment. Its FP32 dequantized value is
+**Outlier lane (speculative):** K-column 2027 **[unverified local hypothesis; not in primary
+sources]** is removed from the FP16 fragment. Its FP32 dequantized value is
 multiplied by the corresponding activation in FP32 and accumulated into `float spike[N]` per
 output row, added after the WMMA epilogue. This prevents overflow and keeps the dominant
 dimension exact. Gate: `spike` output must be bit-identical to the Python reference for that
@@ -207,12 +236,14 @@ column in `--math-ref` mode.
 1. Stored representation: codes, scales, shape, block round-trip through `inkbin` byte-for-byte —
    this is loopkit guarantee 1 (`ans_decode(ans_encode(t)) == t`).
 2. Dequantized FP32 operands: our LUT+scale multiply must match `dequantize_nvfp4` / `dequantize_mxfp8`
-   **bit-for-bit** (0 of 1,000,000 sampled elements may differ, including signed zero and dim 2027).
+   **bit-for-bit** (0 of 1,000,000 sampled elements may differ, including signed zero and dim 2027
+   **[unverified local hypothesis; not in primary sources]**).
 3. GEMM: loopkit's `fdm_dot` is byte-identical only because it calls the *same* `reference_dot`.
    A C++ FP32 GEMM cannot match numpy's internal reduction order in general, so `--math-ref` is
    validated by consuming Python-dumped FP32 operands and comparing with a documented tolerance;
    the FP32 WMMA path is a separate, measured drift budget (relative L2 ≤2e-3 on non-outlier dims,
-   dim 2027 exact). Never describe FP16-TC output as "bit-exact" in reports.
+   dim 2027 exact **[unverified local hypothesis; not in primary sources]**). Never describe
+   FP16-TC output as "bit-exact" in reports.
 
 **Certificates:** port `bitloop.py` verbatim: `state_digest` = SHA-256 over sorted tensor keys with
 key + shape + dtype + raw bytes (sign bit included); `certify_pass` per pass; root digest =
@@ -226,15 +257,18 @@ single flipped bit in any pass. CycleAudit semantics are preserved: a speed clai
 
 1. **Entry:** batch 8 tokens. Route-once for all 24 layers' MoE decisions at first use; for middle
    layers stash top-8 in `LoopPassCache::route`. Prelude (blocks 0–1, layers 0–11) runs **once**,
-   as a batched M=8 GEMM. Compute and store the two message vectors `a0, b0` and `gamma=0`.
+   as a batched M=8 GEMM. Compute and store the two message vectors `a0, b0` and `gamma=0`
+   (scalar-gamma simplification; upstream uses rank-r gain/forget loop controllers).
 2. **Middle loop:** for `p = 0..2` (varloop 1..5), for `l = 0..11`:
-   - Skip mixing on `p==0` (`gamma=0` ⇒ `mixed = curr`).
+   - Skip mixing on `p==0` (`gamma=0` ⇒ `mixed = curr`) in the simplified model; upstream gates
+     are rank-r gain/forget controllers.
    - Attention reads KV/residual slot `[token][l][p]` — never slot `p-1`; appends one new K/V per
      pass into its own slot. This is what "attention residuals" implies for a looped block and is
      checkable at seq=1 against the Python reference.
    - MoE: one GEMM per expert, M = count of (token, pass) pairs routed to it across currently-ready
      stages (max 24). Reuse `tiles[l][8]` from pass 0; re-gather only if `route_dirty`.
-   - Write residual `[b][l][p]`, compute `a_{p+1}, b_{p+1}` and the learned gate `gamma_{p+1}` into
+   - Write residual `[b][l][p]`, compute `a_{p+1}, b_{p+1}` and the simplified learned gate
+     `gamma_{p+1}` (upstream: rank-r gain/forget controllers) into
      `msg[b][p+1]`; update `pass_digest`.
 3. **GPU partition:** GPU0 owns prelude + middle block 2 (layers 12–17); GPU1 owns middle block 3
    (layers 18–23) + coda. Weights split ≈10 GB each; no NVMe spill. After each pass, transfer only
@@ -257,13 +291,13 @@ and bit-exactness vs loopkit. Baseline is captured in week 1, not assumed.
 | Week | Deliverable | tok/s b1 | tok/s b8 | GB/token (b1 / b8) | Bit-exactness gate |
 |---|---|---|---|---|---|
 | 1 | `inkbin` reader, host codec mirror, LUTs, `--math-ref` path, `cert.hpp`, `audit.hpp`, `compare_to_loopkit.py`; **no speedup claim** | baseline, measured (expected ~10–20) | baseline, measured (expected ~60–120) | baseline, expected 3.04 / 0.38 (naive 5.4B×4.5b ÷ batch) | 0/1,000,000 mismatched f32 dequant bits; ANS/inkbin roundtrip exact; `--math-ref` operands byte-identical to Python dump; 3-pass cert root matches |
-| 2 | `dequant_gemm.cu` WMMA + d2027 side lane, block-major scale plane, drift test | ≥25 | ≥160 | ≤2.6 / ≤0.32 | dequant still 0 mismatches; TC relative L2 ≤2e-3; d2027 exact; report top-8 agreement % |
+| 2 | `dequant_gemm.cu` WMMA + speculative d2027 side lane (unverified local hypothesis; not in primary sources), block-major scale plane, drift test | ≥25 | ≥160 | ≤2.6 / ≤0.32 | dequant still 0 mismatches; TC relative L2 ≤2e-3; d2027 exact if hypothesis holds; report top-8 agreement % |
 | 3 | RORET + PIBS: route-once, pass-resident tiles, pass-interleaved batching, 2-GPU layer split | ≥40 | ≥300 | ≤2.0 / ≤0.25 | agreement ≥95%; cert root matches for `--math-ref` on 3 passes; TC drift unchanged |
 | 4 | Hardening, varloop 1–5, Metal scaffolding, CycleAudit report vs llama.cpp Q4_K_M baseline | ≥60 | ≥500 | ≤1.9 / ≤0.23 | 0 mismatches over 100 random prompt dumps; `verify_loop` true for all; **claim ≤ ci_low** and ≥1.3× vs baseline |
 
 Week 1 exit criterion in full: (a) `compare_to_loopkit.py` reports `mismatch_count == 0` on 1e6
 random NVFP4/MXFP8 codes including signed zero, block-boundary shapes (K%16≠0, K%32≠0), and
-column 2027; (b) `fdm`-equivalent probe on shape (8,256)×(256,256) shows 0.0 error in `--math-ref`;
+column 2027 **[unverified local hypothesis; not in primary sources]**; (b) `fdm`-equivalent probe on shape (8,256)×(256,256) shows 0.0 error in `--math-ref`;
 (c) `certify_loop` detects an injected single-bit flip and `assert_lossless` raises; (d) a
 CycleAudit baseline JSON with ≥50 repeats for b1 and b8 is committed. No wall-clock win is claimed.
 
@@ -278,7 +312,8 @@ Stop or pivot immediately if any of these is measured, regardless of effort sunk
 2. **Wrong bottleneck:** middleware-block weight re-reads are <20% of HBM traffic in the Nsight
    profile → the loop is not the win; generic kernel tuning (llama.cpp territory) is the real task.
 3. **Numerics fail:** FP16-TC drift changes pass-3 top-8 for >1% of tokens, flips output argmax on
-   >5% of prompts, or d2027 output differs from reference by >0 ulp in `--math-ref` → shut down the
+   >5% of prompts, or d2027 output (unverified local hypothesis; not in primary sources) differs
+   from reference by >0 ulp in `--math-ref` → shut down the
    FP16 path.
 4. **Week 2 gate missed** (b1 <25 tok/s or b8 <160 tok/s) *and* >60% of time is in dequant+GEMM →
    our kernel cannot compete with cuBLAS-backed stacks; pivot to calling a vendor library.
@@ -286,5 +321,6 @@ Stop or pivot immediately if any of these is measured, regardless of effort sunk
    NVMe → sharding design fails.
 6. **No defensible win at week 4:** CycleAudit `ci_low` for speedup vs llama.cpp Q4_K_M is <1.0 →
    report "no measured advantage" and stop the project; do not publish a rounded-up claim.
-7. **Mobile scope fails:** if the FP32 d2027 side lane exceeds 10% of decode time on Apple Silicon,
+7. **Mobile scope fails:** if the FP32 d2027 side lane (unverified local hypothesis; not in primary
+   sources) exceeds 10% of decode time on Apple Silicon,
    drop the mobile milestone rather than port an uncompetitive path.

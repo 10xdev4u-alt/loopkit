@@ -7,6 +7,9 @@ weight_activations_b = 5.4
 layers = 24
 loop_passes = 3
 experts = 128
+# Fact-check 2026-11-24: this dimension is an UNVERIFIED LOCAL HYPOTHESIS;
+# NOT IN PRIMARY SOURCES (absent from TML's release post and model card).
+# Keep as a local test knob only, not as a stated model property.
 outlier_dim = 2027
 
 [codec]

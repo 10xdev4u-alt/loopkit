@@ -1,5 +1,9 @@
 # Geometry gate — definitive result (NEGATIVE)
 
+> **Source-status note (2026-11-24).** Dimension 2027 below is an **unverified local
+> hypothesis; not in primary sources** (absent from TML's release post/model card). It is a
+> synthetic test knob in this experiment, not a confirmed property of Inkling 2 Mini.
+
 Kernel: `jprinceraj/loopkit-geometry-gate-single-t4` (Kaggle T4, two independent
 runs: before and after the E2M1 mapping fix; same verdict both times).
 
@@ -20,7 +24,8 @@ and `lambda_drop` gates all PASS.
 ## What failed
 
 With a faithful NVFP4 quantizer (the fixed one), on a synthetic 512×2304 matrix
-with a 16× outlier injected at dimension 2027:
+with a 16× outlier injected at dimension 2027 **[unverified local hypothesis; not in primary
+sources — synthetic test knob here]**:
 
 - `fp4_mse_baseline` = 0.009946
 - `fp4_mse_rotated`  = 0.010018

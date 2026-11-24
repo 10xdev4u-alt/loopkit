@@ -3,9 +3,19 @@
 Lossless NVFP4/MXFP4 toolkit for looped MoE inference: entropy coding, bitwise
 certificates, per-pass weight edits, fused dequant-GEMM staging, and a speed-claim oracle.
 
+> **Source fact-check (2026-11-24).** Upstream llama.cpp already implements the Inkling2 looped
+> architecture (`LLM_ARCH_INKLING2_LOOP`, `src/models/inkling2-loop.cpp`,
+> `src/models/inkling2.cpp`, `conversion/inkling2.py`): cache slots
+> `n_slot = n_phys + (n_passes-1)*(core_end-core_start)` and rank-r
+> `LOOP_*_CTRL_*` gain/forget controllers, not a scalar softmax gamma. Our fork's contribution is
+> union-resident MoE routing on top of that upstream graph, not building the loop graph from
+> scratch. See `docs/INKLING_INTEGRATION.md`.
+
 Target model: **Inkling 2 Mini** (Thinking Machines Lab, Apache-2.0) — 24 layers
 (20 native NVFP4 + 4 MXFP8), 128-expert MoE, middle layers loop 3×, ~20 GB,
-known activation outlier at dimension 2027. **No weights ship with this repo.**
+**[unverified local hypothesis; not in primary sources]** activation outlier at dimension
+2027 (claimed only in our repo/config/tests; absent from TML's release post and model card).
+**No weights ship with this repo.**
 
 ## What this is
 
@@ -81,7 +91,8 @@ certificates, kernel or audit modules.
 ## Model config
 
 `configs/inkling2mini.toml` holds the target constants including
-`outlier_dim = 2027` and `loop_passes = 3`.
+`outlier_dim = 2027` **[unverified local hypothesis; not in primary sources]** and
+`loop_passes = 3`.
 
 ## Tests
 

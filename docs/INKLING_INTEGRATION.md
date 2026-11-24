@@ -67,8 +67,11 @@ core layers). Upstream converter stacks, per core layer `i`, four rows
 `[q[2i], kv[2i], kv[2i+1], q[2i+1]]` into one `LOOP_MSG_QUERY` [4,2304]. `[F]` Learned controllers exist
 **only on layers 6–17**: for each of `attn`, `k`, `v`, `mlp`, `down_weight`[64,4608] and
 `gain_weight`/`forget_weight`[2304,64] — i.e. a rank-64 per-channel gate, not a scalar. Upstream forces
-all loop/controller tensors to F32 on export. `[I]` Our local `gamma` softmax scalar in
-`docs/ENGINE_SPEC.md` is a simplification; the real gate is rank-64 with gain+forget per stream.
+all loop/controller tensors to F32 on export. `[F]` Upstream names these
+`LLM_TENSOR_LOOP_Q_CTRL_DOWN / _GAIN / _FORGET` (and `_K_CTRL_*`, `_V_CTRL_*`, `_FFN_CTRL_*`) in
+`gguf-py/gguf/constants.py` / `src/models/inkling2-loop.cpp`; the graph applies
+`(1-forget)*cur + gain*message` (`src/models/inkling2.cpp`). `[I]` Our local `gamma` softmax scalar
+in `docs/ENGINE_SPEC.md` is a simplification; the real gate is rank-64 with gain+forget per stream.
 
 **Context.** `[F]` `model_max_length = 1048576` (1M tokens); sliding window 1024. Natively multimodal
 (ViT: 23 layers, hidden 1024, 16 heads, patch 20); `mtp_config` declares 3 MTP layers and
@@ -76,8 +79,9 @@ all loop/controller tensors to F32 on export. `[I]` Our local `gamma` softmax sc
 `visual.*`). `[I]` 48 = number of layer applications, suggesting MTP reads pass boundaries.
 
 **Known outlier.** `[L]` "activation outlier at dimension 2027" appears only in our `README.md`,
-`configs/inkling2mini.toml` (`outlier_dim=2027`), `docs/ENGINE_SPEC.md` and tests. **None of the TML/HF
-primary sources mention it.** Treat as an unverified local premise (risk #4).
+`configs/inkling2mini.toml` (`outlier_dim=2027`), `docs/ENGINE_SPEC.md` and tests. **none of the TML/HF
+primary sources mention it.** Treat it as an **unverified local hypothesis; not in primary
+sources** — a local premise only (risk #4).
 
 **Varloop variant.** `[F]` `TML-d24-varloop-research`: same weights shape, inference-time 1–5 passes,
 trained with pass ratio 1:2:6:2:1, RL at 3 passes; effective 3.4B @1, 5.4B @3, 7.4B @5. `[F]`
@@ -91,6 +95,11 @@ never training past 5; serial N-hop lookup kept improving to 10. `[F]` Research-
 `src/models/inkling2.cpp`, `conversion/inkling2.py`, `common/parsers/inkling.cpp` and
 `tools/mtmd/models/inkling2v.cpp`. `[I]` The correct first move for our fork is to rebase/cherry-pick
 these; only add an enum if the fork is older, and then use the upstream name/ID to stay GGUF-compatible.
+`[F]` Upstream allocates pass-indexed cache slots as
+`n_slot = n_phys + (n_passes-1)*(core_end-core_start)` (`src/models/inkling2-loop.cpp`: 24 + 2×12 =
+48 slots), sharing physical weights while each slot keeps its own KV/conv state. `[I]` Our fork's
+contribution is union-resident MoE routing **on top of** this upstream loop graph/converter, not
+building the loop graph from scratch.
 
 **GGUF metadata** `[F]`: `inkling2_loop.loop.start = 6`, `.loop.end = 18`, `.loop.count = 3`,
 `.loop.gate_rank = 64`, `.loop.varying = false`; also `inkling2.num_loops`,
@@ -117,9 +126,10 @@ publicly tabulated; read them from an existing GGUF header (risk #1).
 4. Run layers 18–23 once (coda), emit logits. For varloop, read `.loop.varying` and `.loop.count`
    instead of hardcoding three.
 
-**Cache-hook plug-in.** `[?]` There is **no** `src/llama-roret.h` in this workspace; the RORET design
-lives in `docs/ENGINE_SPEC.md` as `include/loopengine/loop_state.hpp` with `LoopPassCache`/`LoopMessage`.
-`[I]` Integration shape: allocate one `LoopPassCache` per request inside llama.cpp's per-sequence state
+**Cache-hook plug-in.** `[?]` This research note was written before the fork added
+`src/llama-roret.h` (union-resident MoE bookkeeping, default-off); the earlier RORET design also
+lives in `docs/ENGINE_SPEC.md` as `include/loopengine/loop_state.hpp` with
+`LoopPassCache`/`LoopMessage`. `[I]` Integration shape: allocate one `LoopPassCache` per request inside llama.cpp's per-sequence state
 and have the graph builder pass a pointer into the kernel path, so the union-resident fields
 (`msg[batch][pass]`, `residual[layer][pass]`, `kv[layer][pass][2]`, `route`, `route_dirty`, `tiles`,
 `bytes`) are reused across the three passes instead of re-created. Route-once expert tiles and the
@@ -175,7 +185,9 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
 
 - **Facts from source:** all numbers in §1 except the outlier and the prelude-boundary interpretation;
   exact HF tensor names/shapes/dtypes; upstream enum, metadata keys, GGUF tensor names and converter
-  behavior; licenses and GGUF availability claims.
+  behavior; the `n_slot` cache-slot formula and rank-r `LOOP_*_CTRL_*` gain/forget gate implementation;
+  licenses and GGUF availability claims. Upstream owns the loop graph and converter; our fork's
+  delta is union-resident MoE routing on top of upstream.
 - **Inference by us:** global-layer identification from `local_layer_ids`; [3,2304] banks as pass state;
   rank-64 gate reading; MTP target ids as pass boundaries; graph-builder replay recipe; cache-hook
   integration shape; "rebase first" recommendation.
