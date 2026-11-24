@@ -1,8 +1,13 @@
 """E2M1/E4M3 emulation and a bit-exact rANS coder for NVFP4/MXFP8 tensors.
 
 The lossless claim in this module is about the *stored representation*:
-`ans_decode(ans_encode(t))` reproduces codes, scales, shape and block exactly.
-Dequantization to float32 is intentionally lossy and is never called lossless.
+`ans_decode(ans_encode(t))` reproduces codes, scales, shape, block, layout and
+scale shape exactly. Dequantization to float32 is intentionally lossy and is
+never called lossless.
+
+MXFP8 has two block layouts: the flat 1-D block of 32 used for activations
+(`quantize_mxfp8`) and the 2-D [32, 32] tile used for expert weights
+(`quantize_mxfp8_weights`), one E8M0 scale per tile.
 """
 
 from __future__ import annotations
@@ -77,6 +82,8 @@ class MXFP8Tensor:
     scales: np.ndarray
     shape: tuple[int, ...]
     block: int = 32
+    # "1d" = activation blocks of `block` elements; "2d" = weight tiles.
+    layout: str = "1d"
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,9 @@ class ANSStream:
     codec: str = "deflate-v1"
     shape: tuple[int, ...] = ()
     block: int = 16
+    layout: str = "1d"
+    scale_shape: tuple[int, ...] = ()
+    fmt: str = "nvfp4"
 
 
 def _block_view(x: np.ndarray, block: int):
@@ -134,6 +144,8 @@ def quantize_mxfp8(x: np.ndarray, block: int = 32) -> MXFP8Tensor:
 
 
 def dequantize_mxfp8(t: MXFP8Tensor) -> np.ndarray:
+    if getattr(t, "layout", "1d") == "2d":
+        return dequantize_mxfp8_weights(t)
     nb = (t.shape[-1] + t.block - 1) // t.block
     padded = np.zeros(t.shape[:-1] + (nb * t.block,), dtype=t.codes.dtype)
     padded[..., : t.shape[-1]] = t.codes.reshape(t.shape)
@@ -141,6 +153,44 @@ def dequantize_mxfp8(t: MXFP8Tensor) -> np.ndarray:
     scales = (2.0 ** (t.scales.astype(np.int32) - 127))[..., None]
     out = (e4m3_decode(b) * scales).reshape(t.shape[:-1] + (-1,))[..., : t.shape[-1]]
     return out.reshape(t.shape).astype(np.float32)
+
+
+def quantize_mxfp8_weights(x: np.ndarray, block: int = 32) -> MXFP8Tensor:
+    """Quantize a 2-D weight matrix with one E8M0 scale per `block` x `block` tile.
+
+    The shipped Inkling 2 Mini checkpoint uses ``weight_block_shape = [32, 32]``
+    for MXFP8 expert weights; activations keep the 1-D block of 32. Partial
+    tiles at the bottom/right edge are zero-padded and cropped on dequantize.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    if x.ndim != 2:
+        raise ValueError("MXFP8 weight blocks require a 2-D weight matrix")
+    h, w = x.shape
+    ph, pw = (-h) % block, (-w) % block
+    padded = np.pad(x, ((0, ph), (0, pw))) if (ph or pw) else x
+    th, tw = padded.shape[0] // block, padded.shape[1] // block
+    tiles = padded.reshape(th, block, tw, block).transpose(0, 2, 1, 3)
+    absmax = np.max(np.abs(tiles), axis=(-2, -1))
+    exp = np.ceil(np.log2(np.maximum(absmax, 1e-30) / 448.0)).astype(np.int32)
+    exp = np.clip(exp, -126, 126)
+    codes = e4m3_encode(tiles / (2.0 ** exp)[..., None, None])
+    codes = codes.transpose(0, 2, 1, 3).reshape(padded.shape)[:h, :w]
+    return MXFP8Tensor(codes, (exp + 127).astype(np.uint8), x.shape, block, layout="2d")
+
+
+def dequantize_mxfp8_weights(t: MXFP8Tensor) -> np.ndarray:
+    """Dequantize 2-D MXFP8 weight tiles; tile counts come from `scales.shape`."""
+    if len(t.shape) != 2:
+        raise ValueError("MXFP8 weight blocks require a 2-D weight matrix")
+    h, w = t.shape
+    th, tw = t.scales.shape
+    block = t.block
+    padded = np.zeros((th * block, tw * block), dtype=t.codes.dtype)
+    padded[:h, :w] = t.codes.reshape(t.shape)
+    tiles = padded.reshape(th, block, tw, block).transpose(0, 2, 1, 3)
+    scales = (2.0 ** (t.scales.astype(np.int32) - 127))[..., None, None]
+    out = (e4m3_decode(tiles) * scales).transpose(0, 2, 1, 3)
+    return out.reshape(th * block, tw * block)[:h, :w].astype(np.float32)
 
 
 # ---------------------- entropy-coded symbol streams -----------------------
@@ -166,10 +216,11 @@ def _unpack(data: bytes, n: int) -> np.ndarray:
     return np.frombuffer(raw, dtype=np.uint8).copy()
 
 
-def ans_encode(t: NVFP4Tensor, table: Optional[np.ndarray] = None) -> ANSStream:
+def ans_encode(t: NVFP4Tensor | MXFP8Tensor, table: Optional[np.ndarray] = None) -> ANSStream:
     codes = t.codes.astype(np.uint8).ravel()
     scales = t.scales.astype(np.uint8).ravel()
-    f = _freq_table(codes, 16) if table is None else [int(v) for v in table]
+    fmt = "mxfp8" if isinstance(t, MXFP8Tensor) else "nvfp4"
+    f = _freq_table(codes, 16 if fmt == "nvfp4" else 256) if table is None else [int(v) for v in table]
     fs = _freq_table(scales, 256)
     return ANSStream(
         payload=_pack(codes),
@@ -180,17 +231,26 @@ def ans_encode(t: NVFP4Tensor, table: Optional[np.ndarray] = None) -> ANSStream:
         n_scales=int(scales.size),
         shape=tuple(t.shape),
         block=t.block,
+        layout=getattr(t, "layout", "1d"),
+        scale_shape=tuple(t.scales.shape),
+        fmt=fmt,
     )
 
 
-def ans_decode(s: ANSStream) -> NVFP4Tensor:
+def ans_decode(s: ANSStream) -> NVFP4Tensor | MXFP8Tensor:
     codes = _unpack(s.payload, s.n)
     scales = _unpack(s.scale_payload, s.n_scales or s.n)
-    nb = (s.shape[-1] + s.block - 1) // s.block
-    scales = scales.reshape(s.shape[:-1] + (nb,))
+    if s.scale_shape:
+        scale_shape = tuple(s.scale_shape)
+    else:  # legacy streams: recompute the 1-D block count
+        nb = (s.shape[-1] + s.block - 1) // s.block
+        scale_shape = s.shape[:-1] + (nb,)
+    scales = scales.reshape(scale_shape)
+    if getattr(s, "fmt", "nvfp4") == "mxfp8":
+        return MXFP8Tensor(codes.reshape(s.shape), scales, s.shape, s.block, s.layout)
     return NVFP4Tensor(codes.reshape(s.shape), scales, s.shape, s.block)
 
 
-def ans_size(t: NVFP4Tensor) -> int:
+def ans_size(t: NVFP4Tensor | MXFP8Tensor) -> int:
     s = ans_encode(t)
     return len(s.payload) + len(s.scale_payload) + 4 * len(s.freq_table) + 4 * len(s.scale_freq_table) + 64

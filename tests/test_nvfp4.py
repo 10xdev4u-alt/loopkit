@@ -1,7 +1,9 @@
 import numpy as np
 import pytest
 
-from loopkit.nvfp4 import (ans_decode, ans_encode, ans_size, dequantize_nvfp4,
+from loopkit.nvfp4 import (ans_decode, ans_encode, ans_size, dequantize_mxfp8,
+                           dequantize_mxfp8_weights, dequantize_nvfp4,
+                           quantize_mxfp8, quantize_mxfp8_weights,
                            quantize_nvfp4, e4m3_decode, e4m3_encode)
 
 
@@ -56,3 +58,46 @@ def test_dequant_shape_and_finite():
     t = quantize_nvfp4(x)
     d = dequantize_nvfp4(t)
     assert d.shape == x.shape and np.isfinite(d).all()
+
+
+def test_mxfp8_weights_use_2d_tile_scales():
+    x = np.random.default_rng(2026).standard_normal((64, 64)).astype(np.float32)
+    t = quantize_mxfp8_weights(x)
+    assert t.scales.shape == (2, 2)  # one E8M0 scale per 32x32 tile
+    assert t.layout == "2d"
+    assert t.codes.shape == x.shape
+    d = dequantize_mxfp8_weights(t)
+    assert d.shape == x.shape and np.isfinite(d).all()
+
+
+def test_mxfp8_weights_ans_roundtrip_preserves_layout_and_scale_shape():
+    x = np.random.default_rng(77).standard_normal((70, 45)).astype(np.float32)
+    t = quantize_mxfp8_weights(x)
+    u = ans_decode(ans_encode(t))
+    assert np.array_equal(u.codes, t.codes)
+    assert np.array_equal(u.scales, t.scales)
+    assert u.shape == t.shape and u.block == t.block
+    assert u.layout == t.layout == "2d"
+    assert u.scales.shape == t.scales.shape == (3, 2)
+    assert np.array_equal(dequantize_mxfp8_weights(u), dequantize_mxfp8_weights(t))
+
+
+def test_mxfp8_activation_path_stays_1d():
+    x = np.random.default_rng(5).standard_normal((8, 64)).astype(np.float32)
+    t = quantize_mxfp8(x)
+    assert t.layout == "1d"
+    assert t.scales.shape == (8, 2)  # flat runs of 32, one scale per row-run
+    assert dequantize_mxfp8(t).shape == x.shape
+    u = ans_decode(ans_encode(t))
+    assert np.array_equal(u.codes, t.codes) and np.array_equal(u.scales, t.scales)
+    assert u.layout == "1d" and u.scales.shape == t.scales.shape
+    assert np.array_equal(dequantize_mxfp8(u), dequantize_mxfp8(t))
+
+
+def test_mxfp8_2d_dequant_error_is_comparable_to_1d():
+    x = np.random.default_rng(1234).standard_normal((128, 128)).astype(np.float32)
+    d2 = dequantize_mxfp8_weights(quantize_mxfp8_weights(x))
+    d1 = dequantize_mxfp8(quantize_mxfp8(x))
+    mse2 = float(np.mean((d2 - x) ** 2))
+    mse1 = float(np.mean((d1 - x) ** 2))
+    assert mse1 > 0 and mse2 <= 1.5 * mse1

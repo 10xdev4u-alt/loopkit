@@ -22,6 +22,9 @@ nvfp4_layers = 20
 mxfp8_layers = 4
 nvfp4_block = 16
 mxfp8_block = 32
+# Verified in the shipped hf_quant_config.json: MXFP8 activations use a flat
+# block of 32, but expert weights use a 2-D 32x32 tile (one E8M0 scale per tile).
+mxfp8_weight_block_shape = [32, 32]
 codec = "deflate-v1"
 
 [audit]

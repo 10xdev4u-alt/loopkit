@@ -21,7 +21,7 @@ Target model: **Inkling 2 Mini** (Thinking Machines Lab, Apache-2.0) — 24 laye
 
 - **ANS-NVFP4** — deterministic E2M1/E4M3 emulation plus entropy coding of the
   stored codes and block scales. `ans_decode(ans_encode(t))` is bit-exact on
-  codes, scales, shape and block.
+  codes, scales, shape, block, layout and scale shape.
 - **BitLoop** — SHA-256 certificates over all three loop passes. One flipped bit
   invalidates the certificate; `assert_lossless` raises with the root digest.
 - **FDM-Dot** — dequant + GEMM staging that is byte-identical to the float32
@@ -31,6 +31,14 @@ Target model: **Inkling 2 Mini** (Thinking Machines Lab, Apache-2.0) — 24 laye
 
 Supporting modules: `loopedit` (immutable per-pass weight diffs) and `geometry`
 (LittleBit-2 style diagnostics with explicit kill gates).
+
+**MXFP8 weights vs activations (verified from the shipped `hf_quant_config.json`).**
+Activations use flat 1-D blocks of 32, so `quantize_mxfp8`/`dequantize_mxfp8`
+keep that layout. Expert weights instead use a 2-D `[32, 32]` tile with one
+E8M0 scale per 1024 elements: `quantize_mxfp8_weights`/`dequantize_mxfp8_weights`
+implement this (`layout="2d"`, scales shaped `(ceil(H/32), ceil(W/32))`).
+NVFP4 expert weights use row-wise `[1, 16]` blocks, which `quantize_nvfp4`
+already applies; the ANS coder preserves the layout and scale shape on roundtrip.
 
 ## Hardware honesty
 

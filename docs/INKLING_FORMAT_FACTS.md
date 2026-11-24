@@ -117,6 +117,11 @@ So "layers 6..17 (upstream llama.cpp)" = 0-indexed inclusive start/end; "layers 
 
 1. **MXFP8 weight block shape is 2-D [32, 32], not a flat 32.** Our local `mxfp8_block=32` is right for activations (S5 `block_size: 32`) but wrong if the weight dequantizer groups weights into 1-D runs of 32. *Cheap test:* load `hf_quant_config.json` (or curl S5 and `jq '.model.parameter_groups[] | select(.compute_dtype=="mxfp8") | .weight_block_shape'`) → expect `[32,32]`; then assert our dequant routine's per-scale element count for `layers.20..23.mlp.experts.*_weight` is `32*32=1024`, not `32`. Print the inferred scale shape for `w13_weight` (~[128,72,72]) and diff against ours.
 
+   **Local fix (2026-11-24):** implemented `quantize_mxfp8_weights` /
+   `dequantize_mxfp8_weights` with 2-D `[32, 32]` tile scales and `layout="2d"`;
+   `quantize_mxfp8` / `dequantize_mxfp8` remain the flat 1-D activation path.
+   `configs/inkling2mini.toml` now records `mxfp8_weight_block_shape = [32, 32]`.
+
 2. **Only expert weights are low-bit; the rest is BF16/FP32.** Our docs/config must not say "all weights NVFP4 except last 4 layers" — S7 says "the remaining weights are BF16", and S5 shows FP32 gate biases/attn-res queries plus BF16 attention/norm/embed/vision. Also S4's `quantization_config.quant_algo: "NVFP4"` alone would mis-type layers 20–23. *Cheap test:* enumerate tensors our quantizer touches and assert the set equals exactly `layers.{0..23}.mlp.experts.{w13_weight,w2_weight}`; assert e.g. `layers.0.attn.wq_du.weight`, `layers.0.mlp.gate.weight`, `visual.backbone.*`, `embed.weight` remain BF16 and gate biases FP32. Separately assert our loader reads S5 per-tensor groups, not only S4's top-level `quant_algo`.
 
 3. **NVFP4 weights use [1, 16] row-wise blocks with E4M3 scales + FP32 amax/outer-scale denominator, and 4/6 scale selection.** Verify our dequant applies `scale(F8_E4M3) * amax/outer_scale_denominator` and selects scales per row of 16 (not 16×16 tiles, not a flat 16 spanning row boundaries). *Cheap test:* for `layers.0.mlp.experts.w13_weight` assert our scale count equals `numel/16` and that companion `*_amax` and `*_outer_scale_denominator` tensors exist and are consumed; check our scale-selection code matches `"fouroversix_mae"` (S9's Four Over Six) or at least that using nearest is intentional. Assert no scale is shared across two rows.
