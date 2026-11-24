@@ -47,6 +47,20 @@ python -m loopkit.cli fdm-check
 python -m loopkit.cli geometry
 ```
 
+## Health check
+
+The spectral health checker recovers weights from a pair of activation/output
+arrays (saved as `.npy`) and reports a JSON health card. It needs **no model
+weights**:
+
+```bash
+python -m loopkit.cli health --x FILE.npy --y FILE.npy [--name LAYER] [--ridge 1e-3]
+```
+
+The command exits 0 when the card is not flagged and 1 when it is. For a
+directory of `*.x.npy` / `*.y.npy` pairs, use
+`python -m loopkit.cli health --batch DIR` to print a list of cards.
+
 ## Guarantees (exactly two)
 
 1. `ans_decode(ans_encode(t)) == t` bit-exact on stored representation.

@@ -9,6 +9,7 @@ from typing import Sequence
 
 import numpy as np
 
+from . import shc
 from .audit import CycleAudit, TimingSample
 from .bitloop import assert_lossless, certify_loop
 from .fdm import fdm_check
@@ -40,6 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = sub.add_parser("geometry")
     g.add_argument("--file", required=False)
+
+    h = sub.add_parser("health", help="spectral health check from activation/output pairs")
+    h.add_argument("--x", metavar="FILE.npy", help="activations (n_samples, d_in)")
+    h.add_argument("--y", metavar="FILE.npy", help="outputs (n_samples, d_out)")
+    h.add_argument("--batch", metavar="DIR", help="directory of *.x.npy / *.y.npy pairs")
+    h.add_argument("--name", default="layer", help="layer name for a single pair")
+    h.add_argument("--ridge", type=float, default=1e-3)
     return p
 
 
@@ -51,7 +59,8 @@ def _load_state(path: str) -> dict[str, np.ndarray]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     if args.cmd == "nvfp4-roundtrip":
         x = np.load(args.file).astype(np.float32)
         t = quantize_nvfp4(x, args.block)
@@ -103,6 +112,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"go": verdict.go, "reasons": verdict.reasons,
                           "metrics": verdict.metrics}, indent=2))
         return 0 if verdict.go else 1
+
+    if args.cmd == "health":
+        if args.batch:
+            samples: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+            directory = Path(args.batch)
+            for xp in sorted(directory.glob("*.x.npy")):
+                name = xp.name[: -len(".x.npy")]
+                yp = directory / f"{name}.y.npy"
+                if not yp.is_file():
+                    parser.error(f"health: missing output pair for {name}")
+                samples[name] = (np.load(xp).astype(np.float64),
+                                 np.load(yp).astype(np.float64))
+            cards = shc.health_report(samples)
+            print(json.dumps([c.__dict__ for c in cards.values()], indent=2, default=str))
+            return 1 if any(c.flagged for c in cards.values()) else 0
+
+        if args.x is None or args.y is None:
+            parser.error("health: --x and --y are required unless --batch is given")
+        x = np.load(args.x).astype(np.float64)
+        y = np.load(args.y).astype(np.float64)
+        card = shc.health_card(args.name, x, y, ridge=args.ridge)
+        print(json.dumps(card.__dict__, default=str))
+        return 1 if card.flagged else 0
     return 2
 
 
