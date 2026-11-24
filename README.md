@@ -92,7 +92,24 @@ certificates, kernel or audit modules.
 
 `configs/inkling2mini.toml` holds the target constants including
 `outlier_dim = 2027` **[unverified local hypothesis; not in primary sources]** and
-`loop_passes = 3`.
+`loop_passes = 3`. The loop fields `loop_start = 6`, `loop_end = 18` (exclusive),
+`loop_passes = 3`, and `experts_per_token = 8` are verified upstream facts.
+
+## Model planning
+
+`loopkit.model` loads the config into a frozen `ModelPlan` with derived loop
+numbers. To print the plan as JSON:
+
+```bash
+python -m loopkit.cli model [--config FILE]
+```
+
+The upstream llama.cpp formula gives
+`cache_slots = n_layers + (n_passes-1)*(loop_end-loop_start)`. For the default
+plan (24 physical layers, 3 passes, core layers 6..17) that is `24 + 2*12 = 48`
+cache slots and 48 layer applications per token. `to_dict()` includes an
+`unverified` map labelling `outlier_dim` as an unverified local hypothesis; it
+is absent from primary sources and is not a stated model property.
 
 ## Tests
 

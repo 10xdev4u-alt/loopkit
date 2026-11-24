@@ -5,8 +5,13 @@ total_params_b = 26.4
 active_params_b = 3.4
 weight_activations_b = 5.4
 layers = 24
+# Verified upstream llama.cpp config (src/models/inkling2-loop.cpp):
+# core_start=6, core_end=18 (exclusive -> layers 6..17), num_passes=3.
+loop_start = 6
+loop_end = 18
 loop_passes = 3
 experts = 128
+experts_per_token = 8  # verified upstream: top-8 routing
 # Fact-check 2026-11-24: this dimension is an UNVERIFIED LOCAL HYPOTHESIS;
 # NOT IN PRIMARY SOURCES (absent from TML's release post and model card).
 # Keep as a local test knob only, not as a stated model property.

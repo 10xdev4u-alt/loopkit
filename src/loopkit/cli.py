@@ -14,12 +14,16 @@ from .audit import CycleAudit, TimingSample
 from .bitloop import assert_lossless, certify_loop
 from .fdm import fdm_check
 from .geometry import geometry_gate
+from .model import load_plan
 from .nvfp4 import ans_decode, ans_encode, ans_size, dequantize_nvfp4, quantize_nvfp4
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="loopkit")
     sub = p.add_subparsers(dest="cmd", required=True)
+
+    m = sub.add_parser("model", help="print the model plan as JSON")
+    m.add_argument("--config", default=None, help="path to a plan TOML")
 
     q = sub.add_parser("nvfp4-roundtrip")
     q.add_argument("--file", required=True)
@@ -61,6 +65,10 @@ def _load_state(path: str) -> dict[str, np.ndarray]:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.cmd == "model":
+        print(json.dumps(load_plan(args.config).to_dict(), indent=2))
+        return 0
+
     if args.cmd == "nvfp4-roundtrip":
         x = np.load(args.file).astype(np.float32)
         t = quantize_nvfp4(x, args.block)
