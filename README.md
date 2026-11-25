@@ -28,6 +28,8 @@ Target model: **Inkling 2 Mini** (Thinking Machines Lab, Apache-2.0) — 24 laye
   reference. No silent numerical drift behind a "fused" label.
 - **CycleAudit** — bootstrap confidence intervals for speed claims. A claim is
   valid only if it is below the lower 95% bound, never rounded up.
+- **Traffic** — executable load counts for union-resident MoE routing:
+  `loads_off = n_passes * top_k` versus `loads_on = union_experts`.
 
 Supporting modules: `loopedit` (immutable per-pass weight diffs) and `geometry`
 (LittleBit-2 style diagnostics with explicit kill gates).
@@ -118,6 +120,24 @@ plan (24 physical layers, 3 passes, core layers 6..17) that is `24 + 2*12 = 48`
 cache slots and 48 layer applications per token. `to_dict()` includes an
 `unverified` map labelling `outlier_dim` as an unverified local hypothesis; it
 is absent from primary sources and is not a stated model property.
+
+## Expert load counts
+
+`loopkit.traffic.union_report` makes the route-once load-count claim executable.
+With 3 passes and top-8 routing, a loop-unaware decoder loads 24 experts per
+token; a union-resident one loads `union_experts` (8.48 at message scale 0.1 in
+our sweep), for a reported reduction of `1 - 8.48/24 = 0.647`. Fractional
+unions are per-token averages; a union outside `[top_k, n_passes*top_k]` is
+rejected with `ValueError`.
+
+```bash
+python -m loopkit.cli traffic --union 8 --passes 3 --top-k 8 --msg-scale 0.1
+python -m loopkit.cli traffic --sweep-file SWEEP.json
+```
+
+The sweep file is a JSON object mapping message scale to union size, e.g.
+`{"0.05": 8.25, "0.1": 8.48, "0.3": 9.29}`. Reductions are rounded to three
+decimals and are counts of expert loads, **not** measured wall-clock savings.
 
 ## Tests
 

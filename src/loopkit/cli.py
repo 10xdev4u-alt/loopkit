@@ -16,6 +16,7 @@ from .fdm import fdm_check
 from .geometry import geometry_gate
 from .model import load_plan
 from .nvfp4 import ans_decode, ans_encode, ans_size, dequantize_nvfp4, quantize_nvfp4
+from .traffic import sweep_report, union_report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -52,6 +53,14 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("--batch", metavar="DIR", help="directory of *.x.npy / *.y.npy pairs")
     h.add_argument("--name", default="layer", help="layer name for a single pair")
     h.add_argument("--ridge", type=float, default=1e-3)
+
+    t = sub.add_parser("traffic", help="expert-load counts for union-resident routing")
+    t.add_argument("--union", type=int, default=None, help="union experts across all passes")
+    t.add_argument("--passes", type=int, default=3)
+    t.add_argument("--top-k", type=int, default=8)
+    t.add_argument("--msg-scale", type=float, default=0.1)
+    t.add_argument("--sweep-file", metavar="FILE.json", default=None,
+                   help="JSON dict of {scale: union experts}")
     return p
 
 
@@ -67,6 +76,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.cmd == "model":
         print(json.dumps(load_plan(args.config).to_dict(), indent=2))
+        return 0
+
+    if args.cmd == "traffic":
+        if args.sweep_file is not None:
+            samples = json.loads(Path(args.sweep_file).read_text())
+            print(json.dumps(sweep_report(samples), indent=2))
+            return 0
+        if args.union is None:
+            parser.error("traffic: --union or --sweep-file is required")
+        report = union_report(args.union, n_passes=args.passes, top_k=args.top_k,
+                              msg_scale=args.msg_scale)
+        print(json.dumps(report.to_dict(), indent=2))
         return 0
 
     if args.cmd == "nvfp4-roundtrip":
