@@ -112,8 +112,15 @@ building the loop graph from scratch.
 `blk.N.output_res_query`, `output_res_query`, plus standard
 `token_embd`, `token_embd_norm`, `output`, `output_norm`, `attn_norm/q/k/v/out/gate/rel/...`,
 `ffn_norm/gate_inp/gate_exp/up_exp/gate_up_exp/down_exp`, `ffn_post_conv`, `attn_post_conv`.
-`[?]` Exact per-tensor shapes for the upstream GGUF graph (beyond the HF shapes above) are not
-publicly tabulated; read them from an existing GGUF header (risk #1).
+`[F]` Exact per-tensor shapes resolved by M37 from a bounded range probe of
+`unsloth/Inkling-2-Mini-GGUF/Inkling-2-Mini-UD-IQ1_S.gguf` bytes 0-16777215 (sha256
+87dfcdffd5f422312d54bbe180317dbab93d88a37a8bc0141125ddc8e731ba76; GGUF v3, 744 tensors,
+63 KVs). 204 loop/residual tensors, all F32: 12 `loop_msg_query` [2304,4]; 144 controllers
+(down [4608,64], gain/forget [64,2304] on core layers 6..17); 23 `attn_res_query`
+([2304], global tails 5/11/17/23 are [2304,3]); 24 `ffn_res_query` [2304];
+1 `output_res_query` [2304]. Frozen contract:
+`inkengine-llama/tools/audit/GGUF_LOOP_SHAPES.json`. Measurement/contract scope only:
+no weights, no engine run, no parity, no timing.
 
 **Graph builder.** `[I]` Required replay, consistent with the facts above:
 1. Build blocks 0–5 once (prelude) and cache prelude output; seed message state.
@@ -126,7 +133,10 @@ publicly tabulated; read them from an existing GGUF header (risk #1).
 4. Run layers 18–23 once (coda), emit logits. For varloop, read `.loop.varying` and `.loop.count`
    instead of hardcoding three.
 
-**Cache-hook plug-in.** `[?]` This research note was written before the fork added
+**Cache-hook plug-in.** `[F]` The wiring is implemented opt-in/default-off in
+`inkengine-llama/docs/INKLING_UPSTREAM_WIRING.md` and source-contract-gated by M36
+(`tools/audit/UNION_WIRING.json`); no runtime parity or timing has been measured.
+This research note was written before the fork added
 `src/llama-roret.h` (union-resident MoE bookkeeping, default-off); the earlier RORET design also
 lives in `docs/ENGINE_SPEC.md` as `include/loopengine/loop_state.hpp` with
 `LoopPassCache`/`LoopMessage`. `[I]` Integration shape: allocate one `LoopPassCache` per request inside llama.cpp's per-sequence state
@@ -158,14 +168,20 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
 
 ## 4. Six highest-risk unknowns — cheap verification experiments
 
-1. **Fork/upstream gap & enum identity** `[?]`. Experiment: on a spare checkout of upstream master,
+1. **Fork/upstream gap & enum identity** `[F]` (M29,
+   `tools/audit/UPSTREAM_LOOP_CONTRACT.json` and `M29_UPSTREAM_CONTRACT_SUMMARY.json`:
+   arch string, 47 tensor names, five loop KV keys and slot formula match upstream). Experiment: on a spare checkout of upstream master,
    build `gguf` py tooling and print `MODEL_TENSOR_NAMES[MODEL_ARCH.INKLING2_LOOP]`; diff against our
    fork's constants. No weights needed.
-2. **Gate semantics: rank-64 gain/forget vs our scalar `gamma`** `[?]`. Experiment: read the safetensors
+2. **Gate semantics: rank-64 gain/forget vs our scalar `gamma`** `[F]` (M30,
+   `tools/audit/GATE_SEMANTICS.json` and `M30_GATE_SEMANTICS_SUMMARY.json`: down
+   [64,4608], gain/forget [2304,64] F32, `(1-forget)*cur + gain*message`). Experiment: read the safetensors
    header metadata + converter `tensor_force_quant` (done: shapes [64,4608]/[2304,64], F32) and write a
    synthetic rank-64 mixing unit test with random tensors; no model weights needed. Then, if weights
    ever arrive, hook one core layer and compare gate outputs.
-3. **Loop boundaries: layers 6–17 vs local "prelude 0–11"** `[?]`. Experiment: grep HF header key list
+3. **Loop boundaries: layers 6–17 vs local "prelude 0–11"** `[F]` (M31,
+   `tools/audit/LOOP_BOUNDARIES.json` and `M31_LOOP_BOUNDARIES_SUMMARY.json`: core
+   layers 6..17, prelude 0..5, coda 18..23, n_slot=48). Experiment: grep HF header key list
    for `layers.N.controllers` (gives exactly 6–17) and read converter validation `core_start=6,
    core_end=18` — metadata-only, no weights. Correct `docs/ENGINE_SPEC.md` accordingly.
 4. **"Outlier at dim 2027" has no primary-source support** `[L]`. Experiment: audit where 2027 is
@@ -173,10 +189,19 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
    falsification: run a public HF/SGLang trace with a forward hook on a short prompt and record the
    max-|activation| dimension; requires weights or hosted inference. Until then, flag side-lane as
    speculative.
-5. **Pass-indexed KV: separate slots ×3 vs shared/cross-pass only** `[?]`. Experiment: read
+   `[F]` (M35, cheap part only): classified LOCAL_ONLY_UNVERIFIED from primary-source
+   absence; the speculative FP32 side-lane stays default-off. Real-trace
+   falsification remains NO_GO_BLOCKED without weights or hosted inference
+   (`tools/audit/OUTLIER_PREMISE.json`, `M35_OUTLIER_PREMISE_SUMMARY.json`).
+5. **Pass-indexed KV: separate slots ×3 vs shared/cross-pass only** `[F]` (M32,
+   `tools/audit/PASS_INDEXED_KV.json` and `M32_PASS_INDEXED_KV_SUMMARY.json`: 36
+   distinct pass/core-layer slots, RORET key is (ip, pass), not the cache slot). Experiment: read
    `src/models/inkling2-loop.cpp` for KV slot indexing and `loop_msg_query` kv-row use; optionally
    build the graph with a tiny synthetic GGUF and dump the compute graph. No full weights needed.
-6. **NVFP4/MXFP8 dequant + scale layout (16 vs 32), and Unsloth quant choice** `[?]`. Experiment:
+6. **NVFP4/MXFP8 dequant + scale layout (16 vs 32), and Unsloth quant choice** `[F]`
+   (M33/M34, `tools/audit/QUANT_LAYOUT.json`, `MXFP8_SCALE_HEADER.json` and their
+   summaries: converter split-16 NVFP4 / flat-32 MXFP8 confirmed against the real
+   HF header; Unsloth GGUF header shows IQ1_S/Q2_0 re-quant, not native NVFP4/MXFP8). Experiment:
    compare HF scale shapes (144 = 2304/16 for *both* precisions) against converter
    `_dequant_expert_chunk`; read the GGUF header of one small Unsloth quant by HTTP range request and
    print `general.architecture`, quantization, tensor names/shapes. Partial file only; no 20 GB download.
@@ -193,3 +218,8 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
   integration shape; "rebase first" recommendation.
 - **Local-only, unverified:** activation outlier dim 2027, scalar-softmax gate description, prelude
   layers 0–11, FP32 side-lane, and all performance/latency premises in `docs/ENGINE_SPEC.md`.
+- **M38 closure note (2026-11-28):** section-4 items 1, 2, 3, 5 and 6 and both
+  section-2 markers are verified within the stated contract/metadata scopes by
+  M29-M37; item 4 stays LOCAL_ONLY_UNVERIFIED with real-trace falsification
+  NO_GO_BLOCKED. No weights, engine run, graph execution, parity or timing.
+  NO SPEED CLAIM; CycleAudit claim<=ci_low repeats>=20 loops=3 remains mandatory.
