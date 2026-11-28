@@ -19,6 +19,10 @@ the model's native NVFP4 codes verbatim and never re-quantize.
 >   (`_DOWN`, `_GAIN`, `_FORGET`) at `gate_rank=64` — not a scalar softmax.
 >   Cache slots: `n_slot = n_phys + (n_passes-1)*(core_end-core_start)`; for this
 >   model `24 + 2*12 = 48`, with layers 6–17 looped (not "prelude 0–11").
+> - **Loop boundaries reconciled 2026-11-28:** core layers 6..17
+>   (core_start=6, core_end=18 exclusive), prelude layers 0..5, coda layers 18..23;
+>   6 prelude + 12 loop layers x 3 passes + 6 coda = 48 layer applications from 24 stored layers.
+>   Section 4 was corrected on 2026-11-28 to match the reconciled primary-source boundaries.
 > - **Upstream already provides the looped graph and converter**
 >   (`src/models/inkling2-loop.cpp`, `src/models/inkling2.cpp`,
 >   `conversion/inkling2.py`, `gguf-py/gguf/constants.py`,
@@ -255,11 +259,14 @@ single flipped bit in any pass. CycleAudit semantics are preserved: a speed clai
 
 ## 4. Loop-aware scheduling
 
+> **Loop boundaries corrected 2026-11-28 to match reconciled primary sources:** core layers 6..17 (core_start=6, core_end=18 exclusive), prelude layers 0..5 running once, coda layers 18..23 running once; 6 prelude + 12 loop layers x 3 passes + 6 coda = 48 layer applications from 24 stored layers. The original plan is retained below; section 4 was corrected on 2026-11-28 to match these reconciled boundaries.
+
 1. **Entry:** batch 8 tokens. Route-once for all 24 layers' MoE decisions at first use; for middle
-   layers stash top-8 in `LoopPassCache::route`. Prelude (blocks 0–1, layers 0–11) runs **once**,
-   as a batched M=8 GEMM. Compute and store the two message vectors `a0, b0` and `gamma=0`
+   layers stash top-8 in `LoopPassCache::route`. Prelude = block 0, layers 0..5, runs **once**,
+   as a batched M=8 GEMM. The loop core is layers 6..17 (core_start=6, core_end=18 exclusive)
+   running three passes. Compute and store the two message vectors `a0, b0` and `gamma=0`
    (scalar-gamma simplification; upstream uses rank-r gain/forget loop controllers).
-2. **Middle loop:** for `p = 0..2` (varloop 1..5), for `l = 0..11`:
+2. **Middle loop:** for `p = 0..2` (varloop 1..5), for global `l = 6..17` (12 core layers):
    - Skip mixing on `p==0` (`gamma=0` ⇒ `mixed = curr`) in the simplified model; upstream gates
      are rank-r gain/forget controllers.
    - Attention reads KV/residual slot `[token][l][p]` — never slot `p-1`; appends one new K/V per
@@ -270,15 +277,15 @@ single flipped bit in any pass. CycleAudit semantics are preserved: a speed clai
    - Write residual `[b][l][p]`, compute `a_{p+1}, b_{p+1}` and the simplified learned gate
      `gamma_{p+1}` (upstream: rank-r gain/forget controllers) into
      `msg[b][p+1]`; update `pass_digest`.
-3. **GPU partition:** GPU0 owns prelude + middle block 2 (layers 12–17); GPU1 owns middle block 3
-   (layers 18–23) + coda. Weights split ≈10 GB each; no NVMe spill. After each pass, transfer only
-   `msg + residual + route` for 8 tokens: ≈ 8 × (3×4096×2 + 4096×2) ≈ 0.26 MB/pass, ≈0.8 MB per
-   batch ⇒ ≈65 µs at 12 GB/s vs multi-ms GEMM time: negligible. **Do not expert-shard across GPUs**:
-   all-to-all of 8 tokens × 4096 × 2 B × 48 layer applications would cost ~12 ms/batch.
+3. **GPU partition:** GPU0 owns prelude (0..5) + core block 1 (6..11); GPU1 owns core block 2
+   (12..17) + coda (18..23). Weights split ~10 GB each; no NVMe spill. After each pass, transfer only
+   `msg + residual + route` for 8 tokens: ~ 8 x (3x4096x2 + 4096x2) ~ 0.26 MB/pass, ~0.8 MB per
+   batch => ~65 us at 12 GB/s vs multi-ms GEMM time: negligible. **Do not expert-shard across GPUs**:
+   all-to-all of 8 tokens x 4096 x 2 B x 48 layer applications would cost ~12 ms/batch.
 4. **Reuse inventory:** across passes — expert tiles (Decision 1), KV base index, routing, code/scale
    plane mappings, decoder LUTs; across tokens in a batch — expert weight reads (Decision 2);
    across requests — nothing (each request owns its `LoopPassCache`).
-5. **Coda:** blocks 0–1's tail layers once, then emit logits and the loop certificate root digest.
+5. **Coda:** block 3 layers 18..23 run once, then emit logits and the loop certificate root digest.
 
 ---
 
