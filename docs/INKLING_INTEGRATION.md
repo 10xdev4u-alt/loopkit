@@ -162,9 +162,18 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
 - **Verify, don't assume:** (a) which quant an Unsloth GGUF actually uses (native NVFP4/MXFP8 vs
   Q4_K_M-style re-quant) and its accuracy delta; (b) whether the converter's FP32 expansion of experts
   preserves the "no conversion loss" claim bit-for-bit on real weights; (c) scale-block semantics for
-  MXFP8 layers; (d) that a GGUF produced by the fork is byte-compatible with upstream `llama-cli`;
+  MXFP8 layers; (d) RESOLVED by M44 (synthetic CPU stdout-byte compatibility only, evidence below);
   (e) that tokenizer / chat template (`tml-renderers`) matches; (f) whether our fork's base is new
   enough to accept upstream tensor names unchanged.
+- `[F]` Section-3 item (d) is resolved by M44 on a synthetic CPU fixture only: 26/26 checks
+  PASS, 0 differing bytes at 918 bytes/side. Contract
+  `inkengine-llama/tools/audit/UPSTREAM_CLI_COMPAT.json` (sha256
+  5fb7e01e63c526844231daa6905ea7e78c9f5f37d85fbc595a0286bbae6b2ae6); summary
+  `M44_UPSTREAM_CLI_COMPAT_SUMMARY.json` (sha256
+  38ab9c92f7c378e7f4ed23d834b2bd60367207b754e80f37e6f359c8a5ce8122).
+  Compile/stdout-byte scope only: no real weights, no GPU, no tensor or logits parity, no timing,
+  NO SPEED CLAIM. Items (b) real-weight conversion parity and (e) tokenizer/chat-template
+  remain open; (a), (c) and (f) are unchanged.
 
 ## 4. Six highest-risk unknowns — cheap verification experiments
 
@@ -223,3 +232,9 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
   M29-M37; item 4 stays LOCAL_ONLY_UNVERIFIED with real-trace falsification
   NO_GO_BLOCKED. No weights, engine run, graph execution, parity or timing.
   NO SPEED CLAIM; CycleAudit claim<=ci_low repeats>=20 loops=3 remains mandatory.
+- **M46 closure note (2026-11-28):** section-3 item (d) is PASS-scoped by M44: 26/26 checks,
+  0 differing bytes at 918 bytes/side, synthetic CPU compile/stdout-byte scope only. Contract
+  `tools/audit/UPSTREAM_CLI_COMPAT.json` and summary
+  `M44_UPSTREAM_CLI_COMPAT_SUMMARY.json`. Section-3 item (b) real-weight conversion parity and
+  item (e) tokenizer/chat-template remain open; no weights, no GPU, no tensor/logits parity,
+  no timing, NO SPEED CLAIM. CycleAudit claim<=ci_low repeats>=20 loops=3 remains mandatory.
