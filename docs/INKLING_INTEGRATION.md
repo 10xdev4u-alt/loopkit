@@ -163,7 +163,8 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
   Q4_K_M-style re-quant) and its accuracy delta; (b) whether the converter's FP32 expansion of experts
   preserves the "no conversion loss" claim bit-for-bit on real weights; (c) scale-block semantics for
   MXFP8 layers; (d) RESOLVED by M44 (synthetic CPU stdout-byte compatibility only, evidence below);
-  (e) that tokenizer / chat template (`tml-renderers`) matches; (f) whether our fork's base is new
+  (e) RESOLVED by M47 (frozen tokenizer/chat-template contract only, evidence below);
+  (f) whether our fork's base is new
   enough to accept upstream tensor names unchanged.
 - `[F]` Section-3 item (d) is resolved by M44 on a synthetic CPU fixture only: 26/26 checks
   PASS, 0 differing bytes at 918 bytes/side. Contract
@@ -172,8 +173,20 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
   `M44_UPSTREAM_CLI_COMPAT_SUMMARY.json` (sha256
   38ab9c92f7c378e7f4ed23d834b2bd60367207b754e80f37e6f359c8a5ce8122).
   Compile/stdout-byte scope only: no real weights, no GPU, no tensor or logits parity, no timing,
-  NO SPEED CLAIM. Items (b) real-weight conversion parity and (e) tokenizer/chat-template
-  remain open; (a), (c) and (f) are unchanged.
+  NO SPEED CLAIM. At M46 the still-open items were (b) real-weight conversion parity and
+  (e) tokenizer/chat-template; (e) is resolved by M47 below. (a), (c) and (f) are unchanged.
+- `[F]` Section-3 item (e) is resolved by M47 as a frozen tokenizer/chat-template
+  contract gate: 26/26 checks PASS, blocker empty. Contract
+  `inkengine-llama/tools/audit/TOKENIZER_CHAT_TEMPLATE.json` (sha256
+  998c58d244e66d5b2dd8b09fcd33ebee9e187b38ea95adf66779463186b2d9e7); summary
+  `M47_TOKENIZER_CHAT_TEMPLATE_SUMMARY.json` (sha256
+  3fdc5c088c4a49008bee34f7cd386b021dd89aa3e01bbdd2d35d6f06a6dc6f20).
+  A bounded out-of-band GGUF probe measured byte equality of `tokenizer.chat_template`
+  (6868 B, sha256 53a9035f3255945704b5857657cfb00c1165090c0641c4f782a0cbf268cc16dc)
+  with HF `chat_template.jinja`; the offline checker verifies frozen-digest/length
+  consistency only and cannot observe live GGUF drift. No real weights, no tokenization
+  golden test, no engine run, no timing, NO SPEED CLAIM. Item (b) real-weight
+  conversion parity remains open; (a), (c), (d) and (f) are unchanged.
 
 ## 4. Six highest-risk unknowns — cheap verification experiments
 
@@ -235,6 +248,14 @@ Keep the certificate/digest hooks at pass boundaries. `[L]` The d2027 FP32 side-
 - **M46 closure note (2026-11-28):** section-3 item (d) is PASS-scoped by M44: 26/26 checks,
   0 differing bytes at 918 bytes/side, synthetic CPU compile/stdout-byte scope only. Contract
   `tools/audit/UPSTREAM_CLI_COMPAT.json` and summary
-  `M44_UPSTREAM_CLI_COMPAT_SUMMARY.json`. Section-3 item (b) real-weight conversion parity and
-  item (e) tokenizer/chat-template remain open; no weights, no GPU, no tensor/logits parity,
+  `M44_UPSTREAM_CLI_COMPAT_SUMMARY.json`. At M46 items (b) and (e) were still open; M47
+  resolves (e) as a frozen contract and item (b) real-weight conversion parity remains
+  open; no weights, no GPU, no tensor/logits parity, no timing, NO SPEED CLAIM.
+  CycleAudit claim<=ci_low repeats>=20 loops=3 remains mandatory.
+- **M48 closure note (2026-11-28):** section-3 item (e) is PASS-scoped by M47 as a
+  frozen tokenizer/chat-template contract gate: 26/26 checks, out-of-band byte equality
+  of the 6868-byte chat template only. Contract
+  `tools/audit/TOKENIZER_CHAT_TEMPLATE.json` and summary
+  `M47_TOKENIZER_CHAT_TEMPLATE_SUMMARY.json`. Section-3 item (b) real-weight conversion
+  parity remains NO_GO_BLOCKED; no weights, no engine run, no tokenization golden test,
   no timing, NO SPEED CLAIM. CycleAudit claim<=ci_low repeats>=20 loops=3 remains mandatory.
